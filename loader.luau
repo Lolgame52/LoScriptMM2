@@ -876,6 +876,70 @@ local function getClosestTargetInFOV()
                 if angle < bestAngle then
                     bestAngle = angle
                     best = plr
+-- === AIMBOT (улучшенный: предсказание + мгновенное наведение) ===
+local aimPrediction = true  -- Включить предсказание движения цели
+local aimInstant = true     -- Мгновенное наведение (без сглаживания)
+
+local function hasGun()
+    local char = Player.Character
+    if not char then return false end
+    local tool = char:FindFirstChildWhichIsA("Tool")
+    if tool then
+        local name = tool.Name:lower()
+        if name:find("gun") or name:find("pistol") or name:find("sheriff") then
+            return true
+        end
+    end
+    return false
+end
+
+local function getAimTargets()
+    local targets = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= Player and plr.Character and plr.Character:FindFirstChild("Head") then
+            local role = getPlayerRole(plr)
+            if Settings.AimTarget == "Murderer" and role == "Murderer" then
+                table.insert(targets, plr)
+            elseif Settings.AimTarget == "Sheriff" and role == "Sheriff" then
+                table.insert(targets, plr)
+            elseif Settings.AimTarget == "All" or Settings.AimTarget == "Nearest" then
+                table.insert(targets, plr)
+            end
+        end
+    end
+    return targets
+end
+
+local function getAngleToTarget(targetPos)
+    local cameraPos = camera.CFrame.Position
+    local lookVec = camera.CFrame.LookVector
+    local toTarget = (targetPos - cameraPos).unit
+    return math.deg(math.acos(math.clamp(lookVec:Dot(toTarget), -1, 1)))
+end
+
+local function getClosestTargetInFOV()
+    local targets = getAimTargets()
+    if #targets == 0 then return nil end
+
+    local best = nil
+    local bestAngle = Settings.AimFOV
+    local bestDist = math.huge
+
+    for _, plr in ipairs(targets) do
+        local head = plr.Character.Head
+        local pos = head.Position
+        local angle = getAngleToTarget(pos)
+        if angle <= Settings.AimFOV then
+            local dist = (pos - camera.CFrame.Position).magnitude
+            if Settings.AimTarget == "Nearest" then
+                if dist < bestDist then
+                    bestDist = dist
+                    best = plr
+                end
+            else
+                if angle < bestAngle then
+                    bestAngle = angle
+                    best = plr
                 end
             end
         end
@@ -883,11 +947,35 @@ local function getClosestTargetInFOV()
     return best
 end
 
-local function smoothAimAt(target)
-    if not target or not target.Character or not target.Character:FindFirstChild("Head") then return end
-    local headPos = target.Character.Head.Position
-    local targetCF = CFrame.new(camera.CFrame.Position, headPos)
-    camera.CFrame = camera.CFrame:Lerp(targetCF, aimSmoothing)
+-- Предсказание позиции головы на основе скорости цели
+local function getPredictedHeadPosition(plr)
+    local char = plr.Character
+    local head = char:FindFirstChild("Head")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not head then return nil end
+
+    local targetPos = head.Position
+    if aimPrediction and root and root.Velocity and root.Velocity.Magnitude > 0 then
+        local bulletSpeed = 1000 -- скорость пули (можно изменить)
+        local distance = (targetPos - camera.CFrame.Position).Magnitude
+        local timeToTarget = distance / bulletSpeed
+        targetPos = targetPos + root.Velocity * timeToTarget
+    end
+    return targetPos
+end
+
+local function aimAtTarget(plr)
+    if not plr or not plr.Character or not plr.Character:FindFirstChild("Head") then return end
+    local targetPos = getPredictedHeadPosition(plr)
+    if not targetPos then return end
+    local newCF = CFrame.new(camera.CFrame.Position, targetPos)
+    if aimInstant then
+        camera.CFrame = newCF
+    else
+        -- Плавное наведение с высокой скоростью
+        local smoothing = 0.35
+        camera.CFrame = camera.CFrame:Lerp(newCF, smoothing)
+    end
 end
 
 local aimRenderConnection = nil
@@ -903,7 +991,7 @@ local function startAimLoop()
         end
         local target = getClosestTargetInFOV()
         if target then
-            smoothAimAt(target)
+            aimAtTarget(target)
             StatusLabel.Text = "🎯 Наведение на " .. target.Name
         else
             StatusLabel.Text = "🔍 Нет цели в FOV"
